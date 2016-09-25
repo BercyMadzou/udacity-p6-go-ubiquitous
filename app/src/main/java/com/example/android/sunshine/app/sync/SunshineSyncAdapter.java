@@ -36,6 +36,13 @@ import com.example.android.sunshine.app.R;
 import com.example.android.sunshine.app.Utility;
 import com.example.android.sunshine.app.data.WeatherContract;
 import com.example.android.sunshine.app.muzei.WeatherMuzeiSource;
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.common.api.PendingResult;
+import com.google.android.gms.wearable.DataApi;
+import com.google.android.gms.wearable.PutDataMapRequest;
+import com.google.android.gms.wearable.PutDataRequest;
+import com.google.android.gms.wearable.Wearable;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -51,6 +58,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.Vector;
 import java.util.concurrent.ExecutionException;
+
+import static android.content.ContentValues.TAG;
 
 public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
     public final String LOG_TAG = SunshineSyncAdapter.class.getSimpleName();
@@ -300,6 +309,12 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
             // now we work exclusively in UTC
             dayTime = new Time();
 
+            JSONObject todaysForecast = weatherArray.getJSONObject(0);
+            pushWearableDataItem(
+                    todaysForecast.getJSONObject(OWM_TEMPERATURE).getDouble(OWM_MAX),
+                    todaysForecast.getJSONObject(OWM_TEMPERATURE).getDouble(OWM_MIN),
+                    todaysForecast.getJSONArray(OWM_WEATHER).getJSONObject(0).getInt(OWM_WEATHER_ID));
+
             for(int i = 0; i < weatherArray.length(); i++) {
                 // These are the values that will be collected.
                 long dateTime;
@@ -378,6 +393,43 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
             e.printStackTrace();
             setLocationStatus(getContext(), LOCATION_STATUS_SERVER_INVALID);
         }
+    }
+
+    private void pushWearableDataItem(final double tempHigh, final double tempLow, final int weatherId) {
+        final GoogleApiClient[] googleApiClient = new GoogleApiClient[1];
+        googleApiClient[0] = new GoogleApiClient.Builder(getContext())
+                .addConnectionCallbacks(new GoogleApiClient.ConnectionCallbacks() {
+                    @Override
+                    public void onConnected(Bundle connectionHint) {
+                        Log.d(TAG, "onConnected: " + connectionHint);
+                        PutDataMapRequest putDataMapReq = PutDataMapRequest.create("/weather");
+                        putDataMapReq.getDataMap().putDouble("temp:high", tempHigh);
+                        putDataMapReq.getDataMap().putDouble("temp:low", tempLow);
+                        putDataMapReq.getDataMap().putInt("weatherId", weatherId);
+                        // this should only be done in debug builds because it harms battery life
+                        if (BuildConfig.DEBUG) {
+                            putDataMapReq.getDataMap().putInt("value", (int) System.currentTimeMillis());  // force a message to be sent
+                            putDataMapReq.setUrgent();  // sync immediately
+                        }
+                        PutDataRequest putDataReq = putDataMapReq.asPutDataRequest();
+                        PendingResult<DataApi.DataItemResult> pendingResult =
+                                Wearable.DataApi.putDataItem(googleApiClient[0], putDataReq);
+                    }
+                    @Override
+                    public void onConnectionSuspended(int cause) {
+                        Log.d(TAG, "onConnectionSuspended: " + cause);
+                    }
+                })
+                .addOnConnectionFailedListener(new GoogleApiClient.OnConnectionFailedListener() {
+                    @Override
+                    public void onConnectionFailed(ConnectionResult result) {
+                        Log.d(TAG, "onConnectionFailed: " + result);
+                    }
+                })
+                // Request access only to the Wearable API
+                .addApi(Wearable.API)
+                .build();
+        googleApiClient[0].connect();
     }
 
     private void updateWidgets() {
